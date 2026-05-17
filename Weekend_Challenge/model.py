@@ -109,7 +109,7 @@ def recover_file_from_wav(wav_path, output_dir, NLEN, CP, Filter_coff):
     H = Filter_coff
     SYMBOL_LEN = NLEN + CP
     DATA_BINS = np.arange(1,512) #1 to 511
-    sample_rate, data = wavfile.read(wav_path)
+    _, data = wavfile.read(wav_path)
 
     # If stereo, take one channel
     if data.ndim > 1:
@@ -163,3 +163,36 @@ def recover_file_from_wav(wav_path, output_dir, NLEN, CP, Filter_coff):
         return
 
     print("Failed to parse header for this file.")
+
+
+
+def parse_data(data:np.ndarray, CP:int=32,SYMBOL_LEN:int=1056):
+    # Convert to float
+    data = data.astype(float)
+
+    num_symbols = len(data) // SYMBOL_LEN
+
+    # Remove convolution tail or extra samples
+    data = data[:num_symbols * SYMBOL_LEN]
+
+    # Shape into OFDM symbols
+    blocks = data.reshape(num_symbols, SYMBOL_LEN)
+
+    # Remove cyclic prefix
+    blocks_no_cp = blocks[:, CP:]
+    return blocks_no_cp
+
+def get_modulated_message(ofdm_constellation: np.ndarray, channel_fir_freq: np.ndarray, DATA_BINS:np.ndarray):
+    # FFT each OFDM symbol
+    Y = np.fft.fft(ofdm_constellation, axis=1)
+
+    # Equalise channel
+    X_hat = Y / channel_fir_freq
+
+    # Extract useful frequency bins 1 to 511
+    data_symbols = X_hat[:, DATA_BINS]
+
+    # Flatten all QPSK symbols into one long sequence
+    qpsk_symbols = data_symbols.flatten()
+
+    return qpsk_symbols
