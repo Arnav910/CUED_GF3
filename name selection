@@ -1,0 +1,12 @@
+a="x,dr p[0]nv nwearjighipy134oh t89wco;okjhiq24tio2i24ujmhsdfgvkgausdgfvo ibgry7fboe watugisdufrgvyqeboirutg lkqvwahrjndo"
+indices = np.random.randint(0,len(a)-1,6)
+res = ""
+for i in indices:
+    res += a[i]
+print(res)
+
+
+PS E:\GF3> & D:/CondaEnvs/gg3/python.exe e:/GF3/CUED_GF3/Weekend_Challenge/main.py
+file02.wav
+brriqt
+PS E:\GF3> 
