@@ -1,0 +1,25 @@
+Audio Modem – Analysis Report
+==================================================
+
+Sample rate         : 48000 Hz
+CFO (normalised)    : 0.000000 bins
+Data blocks decoded : 13
+QPSK symbols        : 6643
+
+Channel (MLE)
+  Mean |H|          : 0.0511
+  Std  |H|          : 0.0684
+
+Signal Quality
+  Mean SNR          : 53.63 dB
+  Median SNR        : 34.49 dB
+  EVM (RMS)         : 432.76 %
+  MER               : -9.71 dB
+  Symbol Error Rate : 0.8854
+  Estimated BER     : 0.4427
+
+Output files
+  reconstructed.txt
+  constellation.png
+  channel_fir.png
+  snr_metrics.png
