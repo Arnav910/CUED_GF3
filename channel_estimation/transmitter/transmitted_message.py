@@ -1,12 +1,12 @@
 
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+#sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import argparse
 import numpy as np
 import soundfile as sf
 
-from config import (
+from config_test import (
     SAMPLE_RATE,
     TX_DIR,
 

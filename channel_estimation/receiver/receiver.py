@@ -28,7 +28,7 @@ import soundfile as sf
 from dataclasses import dataclass
 from scipy.signal import correlate
 
-from config import (
+from config_test import (
     SAMPLE_RATE,
     GUARD_DURATION,
 )

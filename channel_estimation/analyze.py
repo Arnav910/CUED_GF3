@@ -29,13 +29,18 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import (
-    SAMPLE_RATE,
-    F_LOW,
-    F_HIGH,
-    WN_SEED,
-    MLS_ORDER,
-)
+# ── Audio ──────────────────────────────────────────────────────────────────
+SAMPLE_RATE       = 48_000          # Hz  (match phone + laptop mic)
+DTYPE             = "float32"
+
+# ── Frequency band of interest ─────────────────────────────────────────────
+F_LOW             = 500             # Hz  lower edge of pilot band
+F_HIGH            = 8_000           # Hz  upper edge (< Nyquist = 24 kHz)
+
+WN_SEED           = 42              # reproducible random sequence
+MLS_ORDER         = 13              # PRBS-13 → sequence length = 2^13 - 1 = 8191 chips
+
+
 from receiver.receiver import RXDataset
 from utils.signal_utils import make_mls
 
@@ -73,10 +78,6 @@ def equalize(Y, H):
     return Y / (H + 1e-12)
 
 
-# ============================================================
-# Metrics
-# ============================================================
-
 def compute_ber(tx_bits, rx_bits):
 
     n = min(len(tx_bits), len(rx_bits))
@@ -110,10 +111,6 @@ def estimate_snr(
     return 10 * np.log10(Ps / (Pn + 1e-12))
 
 
-# ============================================================
-# ML / LS channel estimate
-# ============================================================
-
 def ml_channel_estimate(
     rx_pilots,
     tx_pilots,
@@ -134,10 +131,6 @@ def ml_channel_estimate(
 
     return numerator / denominator
 
-
-# ============================================================
-# TX Pilot Reconstruction
-# ============================================================
 
 def generate_noise_pilots(
     pilot_reps,
@@ -200,10 +193,6 @@ def generate_mls_pilots(
     return np.array(pilots)
 
 
-# ============================================================
-# Method 1
-# ============================================================
-
 def analyze_method1(
     ds,
     pilot_type,
@@ -219,10 +208,6 @@ def analyze_method1(
     rx_pilots = np.array(ds.pilot_symbols_fd)
 
     rx_active = rx_pilots[:, active]
-
-    # --------------------------------------------------------
-    # reconstruct TX pilots
-    # --------------------------------------------------------
 
     if pilot_type == "noise":
 
@@ -245,9 +230,7 @@ def analyze_method1(
 
     tx_active = tx_pilots[:, active]
 
-    # --------------------------------------------------------
-    # ML estimate
-    # --------------------------------------------------------
+  
 
     H = ml_channel_estimate(
         rx_active,
