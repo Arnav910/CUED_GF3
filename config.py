@@ -1,3 +1,7 @@
+### Set Up
+SAMPLE_RATE=48000
+
+
 ### Chirp Params ###
 
 CHIRP_LOW = 20
@@ -5,3 +9,10 @@ CHIRP_HIGH = 20000
 CHIRP_SAMPLES = 1024
 CHIRP_SPACING = 4000
 CHIRP_COUNT = 10
+
+
+### OFDM Params
+CP = 1024
+SYMBOL = 1024
+
+### Header Params
