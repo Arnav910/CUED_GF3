@@ -2,16 +2,19 @@ import argparse
 import os
 import struct
 from typing import Tuple
+from pathlib import Path
 
 import numpy as np
 from scipy.io.wavfile import write as wav_write
+from scipy.signal.windows import tukey
 
-
-def pack_header(file_size: int) -> bytes:
-    """Pack the header protocol: 2 bytes header length + 4 bytes file size. LSB first."""
-    header_payload = struct.pack("<I", file_size)
-    header_length = len(header_payload)
-    return struct.pack("<H", header_length) + header_payload
+def pack_header(file_size: int,filename: str) -> bytes:
+    """Pack the header protocol: 2 bytes header name length + 4 bytes file size. LSB first."""
+    """Convert a filename string to a header byte sequence."""
+    name_bytes = filename.encode("utf-8")
+    header_payload = struct.pack(">I", file_size)
+    header_length = len(name_bytes)
+    return struct.pack(">H", header_length) + header_payload+ name_bytes
 
 
 def bytes_to_bits(data: bytes) -> np.ndarray:
@@ -46,12 +49,15 @@ def generate_linear_chirp(
     length: int,
     fs: int,
     amplitude: float = 1.0,
+    alpha: float = 0.1,
 ) -> np.ndarray:
     """Generate a single linear chirp from f0 to f1 in the given sample length."""
     t = np.arange(length, dtype=np.float64) / fs
     k = (f1 - f0) / (length / fs)
     phase = 2.0 * np.pi * (f0 * t + 0.5 * k * t * t)
-    return amplitude * np.cos(phase)
+
+    window = tukey(length, alpha=alpha)
+    return amplitude * np.cos(phase)*window
 
 
 def generate_chirp_train(
@@ -162,6 +168,7 @@ def build_transmitter_waveform(
     band_low: float = 4000.0,
     band_high: float = 13000.0,
     modulation: str = "bpsk",
+    window_alpha: float = 0.1,
 ) -> np.ndarray:
     """Build the full transmit waveform from an input file."""
     if not os.path.isfile(file_path):
@@ -170,8 +177,9 @@ def build_transmitter_waveform(
     with open(file_path, "rb") as f:
         payload = f.read()
 
+    path_obj = Path(file_path)
     file_size = len(payload)
-    header = pack_header(file_size)
+    header = pack_header(file_size, path_obj.name)
     message = header + payload
     bitstream = bytes_to_bits(message)
     if bitstream.size == 0:
@@ -200,7 +208,7 @@ def build_transmitter_waveform(
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a chirp+OFDM transmitter waveform.")
-    parser.add_argument("input_file", nargs="?", default="README.md", help="Path to the file to transmit. Defaults to README.md when running in VS Code.")
+    parser.add_argument("input_file", nargs="?", default="test.txt", help="Path to the file to transmit. Defaults to test.txt when running in VS Code.")
     parser.add_argument("output_wav", nargs="?", default="tx_output.wav", help="Output WAV path. Defaults to tx_output.wav when running in VS Code.")
     parser.add_argument("--sample-rate", type=int, default=48000, help="Audio sample rate in Hz (48 kHz preferred).")
     parser.add_argument("--chirp-count", type=int, default=10, help="Number of linear chirps in the preamble.")
@@ -214,6 +222,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--band-low", type=float, default=4000.0, help="Lowest OFDM carrier frequency in Hz.")
     parser.add_argument("--band-high", type=float, default=13000.0, help="Highest OFDM carrier frequency in Hz.")
     parser.add_argument("--modulation", choices=["bpsk", "qpsk"], default="qpsk", help="Modulation scheme for OFDM subcarriers (default QPSK).")
+    parser.add_argument("--window-alpha", type=float, default=0.1, help="Tukey window alpha parameter.")
     return parser.parse_args()
 
 
@@ -233,6 +242,7 @@ def main() -> None:
         band_low=args.band_low,
         band_high=args.band_high,
         modulation=args.modulation,
+        window_alpha=args.window_alpha,
     )
     save_waveform_to_wav(waveform, args.sample_rate, args.output_wav)
     print(f"Transmitter waveform built and saved to: {args.output_wav}")
