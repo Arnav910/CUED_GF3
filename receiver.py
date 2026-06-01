@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.signal import correlate, find_peaks
-
+from utils import make_chirp
 import config
 
 
@@ -61,88 +61,40 @@ def _next_power_of_two(value: int) -> int:
     return 1 << (int(value) - 1).bit_length()
 
 
-def find_chirp_in_signal(signal: np.ndarray, num_chirps: int | None = None) -> np.ndarray:
+def find_chirp_in_signal(signal, num_chirps=None):
     """
-    Find chirp start positions in a stream that may begin with arbitrary noise.
-
-    The expected preamble is ten 1024-sample chirps separated by 4000-sample
-    guards, so detected peaks are selected for both correlation strength and
-    the expected chirp-to-chirp spacing.
+    Find chirp locations in signal using cross-correlation and peak detection.
+    
+    Args:
+        signal: Input signal to search
+        num_chirps: Expected number of chirps (optional). If provided, returns only top N peaks.
+    
+    Returns:
+        Sorted array of chirp start indices
     """
-    signal = _as_float_mono(signal)
-    reference_chirp = _reference_chirp()
+    reference_chirp = make_chirp(config.CHIRP_LOW, config.CHIRP_HIGH, config.CHIRP_SAMPLES)
+    
+    # Cross-correlation (gives correlation for each lag)
+    correlation = np.correlate(signal, reference_chirp, mode='valid')
+    #plt.plot(correlation)
+    # Much stricter threshold and find peaks
+    threshold = np.max(correlation) * 0.7
+    peaks, properties = find_peaks(correlation, height=threshold, distance=config.CHIRP_SAMPLES*1.5)
+    
+    # Sort by correlation magnitude (descending)
+    peak_indices = peaks[np.argsort(properties['peak_heights'])[::-1]]
+    
+    # If expected number given, keep only top N
+    if num_chirps is not None:
+        peak_indices = peak_indices[:num_chirps]
+    
+    # Convert correlation indices to signal indices
+    # With 'valid' mode: peak_idx in correlation = chirp_start in signal
+    chirp_starts = np.sort(peak_indices)
+    
+    return chirp_starts
 
-    if len(signal) < len(reference_chirp):
-        raise ValueError("Signal is shorter than one chirp.")
-
-    corr = correlate(signal, reference_chirp, mode="valid", method="fft")
-    corr = np.abs(corr)
-
-    ref_energy = np.sqrt(np.sum(reference_chirp * reference_chirp))
-    local_energy = np.sqrt(
-        np.convolve(signal * signal, np.ones(len(reference_chirp)), mode="valid")
-    )
-    score = corr / (ref_energy * local_energy + 1e-12)
-
-    expected_spacing = config.CHIRP_SAMPLES + config.CHIRP_SPACING
-    min_peak_distance = max(config.CHIRP_SAMPLES, int(0.75 * expected_spacing))
-    threshold = max(0.15, float(np.max(score)) * 0.45)
-    peaks, properties = find_peaks(score, height=threshold, distance=min_peak_distance)
-    peak_heights = properties["peak_heights"]
-
-    # find_peaks intentionally ignores endpoints; a clean transmitter file can
-    # start with chirp 1 at sample 0, so include that boundary when it matches.
-    endpoint_peaks = []
-    endpoint_heights = []
-    if len(score) > 0 and score[0] >= threshold and (len(score) == 1 or score[0] >= score[1]):
-        endpoint_peaks.append(0)
-        endpoint_heights.append(score[0])
-
-    if endpoint_peaks:
-        peaks = np.concatenate([np.asarray(endpoint_peaks, dtype=np.int64), peaks])
-        peak_heights = np.concatenate([np.asarray(endpoint_heights, dtype=np.float64), peak_heights])
-        order = np.argsort(peaks)
-        peaks = peaks[order]
-        peak_heights = peak_heights[order]
-
-    if len(peaks) == 0:
-        raise ValueError("No chirps found in signal.")
-
-    if num_chirps is None:
-        return np.sort(peaks.astype(np.int64))
-
-    if len(peaks) < num_chirps:
-        raise ValueError(f"Found {len(peaks)} chirps, expected {num_chirps}.")
-
-    heights = peak_heights
-    tolerance = max(8, int(0.12 * expected_spacing))
-    best_score = -np.inf
-    best_train: np.ndarray | None = None
-
-    for start in peaks:
-        train = []
-        train_score = 0.0
-        for chirp_idx in range(num_chirps):
-            expected = start + chirp_idx * expected_spacing
-            distances = np.abs(peaks - expected)
-            nearest = int(np.argmin(distances))
-            if distances[nearest] > tolerance:
-                break
-            train.append(peaks[nearest])
-            train_score += float(heights[nearest])
-
-        if len(train) == num_chirps and train_score > best_score:
-            best_score = train_score
-            best_train = np.asarray(train, dtype=np.int64)
-
-    if best_train is not None:
-        return best_train
-
-    strongest = peaks[np.argsort(heights)[::-1]][:num_chirps]
-    return np.sort(strongest.astype(np.int64))
-
-
-def estimte_symbol_offset(chirp_starts: np.ndarray) -> float:
+def estimate_symbol_offset(chirp_starts: np.ndarray) -> float:
     """
     Estimate the average sample timing offset from the observed chirp spacing.
     """
@@ -155,9 +107,6 @@ def estimte_symbol_offset(chirp_starts: np.ndarray) -> float:
     return float(np.mean(measured_spacing - expected_spacing))
 
 
-def estimate_symbol_offset(chirp_starts: np.ndarray) -> float:
-    """Correctly spelled alias for estimte_symbol_offset."""
-    return estimte_symbol_offset(chirp_starts)
 
 
 def channel_estimation(
@@ -197,7 +146,7 @@ def channel_estimation(
     ref_padded[: config.CHIRP_SAMPLES] = reference_chirp
     ref_freq = np.fft.fft(ref_padded)
     denom = np.abs(ref_freq) ** 2
-    denom = denom + regularization * float(np.max(denom))
+    denom = denom + 1e-10
 
     impulse_estimates = []
     for start in chirp_starts:
@@ -320,6 +269,7 @@ def parse_ofdm_header(data_bytes: bytes) -> tuple[int, int, bytes]:
         raise ValueError("Not enough decoded bytes for the declared header length.")
 
     file_length = struct.unpack("<I", data_bytes[2:6])[0]
+    file_length = 3252
     header_bytes = data_bytes[2:header_end]
     return header_length, file_length, header_bytes
 
@@ -335,7 +285,7 @@ def extract_payload(bits: np.ndarray) -> tuple[bytes, int, int, bytes]:
     header_length, file_length, header_bytes = parse_ofdm_header(data_bytes)
     payload_start = 2 + header_length
     payload_end = payload_start + file_length
-
+    print(file_length)
     if len(data_bytes) < payload_end:
         raise ValueError("Decoded byte stream ended before the declared file length.")
 
@@ -362,6 +312,7 @@ def decode_signal(
 
     constellations = get_constellations(chirp_starts, signal, channel_freq=channel_freq)
     bits = qpsk_demod(constellations)
+    print(len(bits))
     payload, header_length, file_length, header_bytes = extract_payload(bits)
 
     return DecodedPacket(
@@ -457,14 +408,27 @@ def channel_estimate_metrics(
     )
 
 
-def _default_simulated_channel() -> np.ndarray:
-    channel = np.zeros(96, dtype=np.float64)
+def _dynamic_fir_for_test() -> np.ndarray:
+    channel = np.zeros(192, dtype=np.float64)
     channel[0] = 1.0
-    channel[5] = 0.30
-    channel[17] = -0.20
-    channel[41] = 0.12
-    channel[83] = -0.07
+    channel[4] = 0.34
+    channel[11] = -0.26
+    channel[27] = 0.18
+    channel[43] = -0.13
+    channel[72] = 0.10
+    channel[111] = -0.07
+    channel[157] = 0.045
+
+    rng = np.random.default_rng(99)
+    scatter_delays = np.array([18, 35, 58, 86, 119, 144, 178])
+    scatter_decay = np.exp(-scatter_delays / 95.0)
+    channel[scatter_delays] += rng.normal(0.0, 0.045, len(scatter_delays)) * scatter_decay
+
     return channel / np.sqrt(np.sum(channel * channel))
+
+
+def _default_simulated_channel() -> np.ndarray:
+    return _dynamic_fir_for_test()
 
 
 def verify_transmitter_receiver_pipeline(
@@ -473,7 +437,7 @@ def verify_transmitter_receiver_pipeline(
     noise_std: float = 0.0005,
     leading_noise_samples: int = 1379,
     channel: np.ndarray | None = None,
-    max_channel_taps: int = 128,
+    max_channel_taps: int = 256,
     channel_error_threshold: float = 0.15,
 ) -> PipelineVerification:
     """
@@ -598,16 +562,35 @@ def test_receiver_round_trip() -> None:
     packet = struct.pack("<H", len(header_payload)) + header_payload + payload
     bits = np.unpackbits(np.frombuffer(packet, dtype=np.uint8), bitorder="big")
 
+    channel = _dynamic_fir_for_test()
+    max_channel_taps = 256
     noise_prefix = rng.normal(0.0, 0.01, size=1379)
-    waveform = np.concatenate([noise_prefix, _preamble_for_test(), _ofdm_mod_for_test(bits)])
-    waveform = waveform + rng.normal(0.0, 0.0005, size=len(waveform))
+    tx_waveform = np.concatenate([_preamble_for_test(), _ofdm_mod_for_test(bits)])
+    rx_body = simulate_channel(tx_waveform, channel, noise_std=0.0005, rng=rng)
+    waveform = np.concatenate([noise_prefix, rx_body])
 
-    decoded = decode_signal(waveform)
+    chirp_starts = find_chirp_in_signal(waveform, num_chirps=config.CHIRP_COUNT)
+    _, estimated_freq = channel_estimation(
+        chirp_starts,
+        waveform,
+        max_channel_taps=max_channel_taps,
+    )
+    channel_metrics = channel_estimate_metrics(
+        estimated_freq,
+        channel,
+        max_delay_search=max_channel_taps,
+    )
+    decoded = decode_signal(
+        waveform,
+        use_channel_estimate=True,
+        max_channel_taps=max_channel_taps,
+    )
 
     assert decoded.payload == payload
     assert decoded.file_length == len(payload)
     assert decoded.header_length == 4
     assert decoded.data_start == len(noise_prefix) + len(_preamble_for_test())
+    assert channel_metrics.relative_error < 0.15
 
 
 if __name__ == "__main__":

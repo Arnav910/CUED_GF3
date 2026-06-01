@@ -182,6 +182,7 @@ def build_transmitter_waveform(
     header = pack_header(file_size, path_obj.name)
     message = header + payload
     bitstream = bytes_to_bits(message)
+    print(bitstream.size)
     if bitstream.size == 0:
         raise ValueError("Input file is empty. Transmitter requires a non-empty payload.")
 
