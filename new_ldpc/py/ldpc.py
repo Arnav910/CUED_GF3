@@ -1,4 +1,4 @@
-giimport numpy as np
+import numpy as np
 import ctypes as ct
 import platform
 import os
