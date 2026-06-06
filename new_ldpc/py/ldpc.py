@@ -1,4 +1,4 @@
-import numpy as np
+giimport numpy as np
 import ctypes as ct
 import platform
 import os
@@ -28,11 +28,11 @@ class code:
         system = platform.system()
         
         if system == 'Windows':
-            lib_name = './bin/c_ldpc.dll'
+            lib_name = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "c_ldpc.dll")
         elif system == 'Darwin':  # macOS
-            lib_name = './bin/c_ldpc.dylib'
+            lib_name = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "c_ldpc.dylib")
         else:  # Linux and others
-            lib_name = './bin/c_ldpc.so'
+            lib_name = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "c_ldpc.so")
         
         # Check if file exists
         if not os.path.exists(lib_name):
@@ -502,10 +502,11 @@ class code:
         Returns:
             tuple: (app posterior values, number of iterations)
         """
-        vdeg = self.vdeg
-        cdeg = self.cdeg
-        intrlv = self.intrlv
-        
+        # Ensure integer arrays are int64 to match the C function signature (int64_t*)
+        vdeg   = np.asarray(self.vdeg,   dtype=np.int64)
+        cdeg   = np.asarray(self.cdeg,   dtype=np.int64)
+        intrlv = np.asarray(self.intrlv, dtype=np.int64)
+
         # Preliminary consistency checks
         if len(ch) != len(vdeg):
             raise ValueError('Channel inputs not consistent with variable degrees')
@@ -520,11 +521,11 @@ class code:
         app = np.zeros(Nv, dtype=np.double)
         
         # Create pointers
-        app_p = app.ctypes.data_as(ct.POINTER(ct.c_double))
-        ch_p = ch.ctypes.data_as(ct.POINTER(ct.c_double))
-        vdeg_p = self.vdeg.ctypes.data_as(ct.POINTER(ct.c_long))
-        cdeg_p = self.cdeg.ctypes.data_as(ct.POINTER(ct.c_long))
-        intrlv_p = self.intrlv.ctypes.data_as(ct.POINTER(ct.c_long))
+        app_p    = app.ctypes.data_as(ct.POINTER(ct.c_double))
+        ch_p     = ch.ctypes.data_as(ct.POINTER(ct.c_double))
+        vdeg_p   = vdeg.ctypes.data_as(ct.POINTER(ct.c_int64))
+        cdeg_p   = cdeg.ctypes.data_as(ct.POINTER(ct.c_int64))
+        intrlv_p = intrlv.ctypes.data_as(ct.POINTER(ct.c_int64))
         
         # Call C function for the sum product algorithm
         if dectype == 'sumprod':
