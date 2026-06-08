@@ -18,12 +18,6 @@ import numpy as np
 from scipy.io.wavfile import read as wav_read
 from scipy.signal import find_peaks
 
-try:
-    from .Transmitter import appendix_a_pilot_values
-except ImportError:
-    from Transmitter import appendix_a_pilot_values
-
-
 # ── Constants (must match Transmitter.py exactly) ─────────────────────────────
 SAMPLE_RATE               = 48_000
 CHIRP_COUNT               = 10
@@ -49,6 +43,7 @@ LDPC_MAX_ITERATIONS       = 200
 DATA_OFDM_SYMBOLS_PER_GROUP = 30
 DATA_CARRIERS_PER_SYMBOL  = 854
 APPENDIX_B_STRIDE         = 15_839
+PILOT_SEED_PATH           = Path(__file__).resolve().parent.parent / "seed_qpsk.npy"
 
 BLOCK_LENGTH  = OFDM_SIZE + OFDM_CP_LENGTH
 CHIRPS_LENGTH = CHIRP_COUNT * CHIRP_LENGTH
@@ -63,10 +58,39 @@ _freqs      = _bins * SAMPLE_RATE / OFDM_SIZE
 ACTIVE_BINS = _bins[(_freqs >= OFDM_F_LOW) & (_freqs <= OFDM_F_HIGH)]
 assert len(ACTIVE_BINS) == DATA_CARRIERS_PER_SYMBOL
 
-_APPENDIX_A_VALUES = appendix_a_pilot_values()
-if len(_APPENDIX_A_VALUES) != OFDM_SIZE // 2 - 1:
-    raise ValueError("Appendix A pilot sequence does not match the OFDM size.")
-ACTIVE_PILOT_VALUES = _APPENDIX_A_VALUES[ACTIVE_BINS - 1]
+def _load_pilot_values(seed_path=PILOT_SEED_PATH):
+    """Load and validate pilot values for positive-frequency bins 1..2047."""
+    seed_path = Path(seed_path)
+    if not seed_path.is_file():
+        raise FileNotFoundError(f"Pilot seed file not found: {seed_path}")
+
+    spectrum = np.load(seed_path, allow_pickle=False)
+    if spectrum.shape != (OFDM_SIZE // 2,):
+        raise ValueError(
+            f"Expected {OFDM_SIZE // 2} pilot values in {seed_path}, "
+            f"got shape {spectrum.shape}."
+        )
+
+    spectrum = np.asarray(spectrum, dtype=np.complex128)
+    if not np.isclose(spectrum[0], 0.0):
+        raise ValueError("Pilot seed index 0 must be the zero-valued DC bin.")
+
+    pilot_values = spectrum[1:]
+    valid_qpsk = (
+        np.isin(pilot_values.real, (-1.0, 1.0))
+        & np.isin(pilot_values.imag, (-1.0, 1.0))
+    )
+    if not np.all(valid_qpsk):
+        invalid_count = int(np.count_nonzero(~valid_qpsk))
+        raise ValueError(
+            f"Pilot seed contains {invalid_count} non-QPSK values "
+            "outside the DC bin."
+        )
+    return pilot_values.copy()
+
+
+_PILOT_VALUES = _load_pilot_values()
+ACTIVE_PILOT_VALUES = _PILOT_VALUES[ACTIVE_BINS - 1]
 
 
 # ── Golay pair ────────────────────────────────────────────────────────────────
@@ -86,7 +110,7 @@ def find_chirp_start(signal):
     ref = np.cos(2.0 * np.pi * (CHIRP_F0 * t + 0.5 * sw * t * t))
     corr = np.correlate(signal, ref, mode='valid')
     peaks, _ = find_peaks(np.abs(corr),
-                          height=np.max(np.abs(corr)) * 0.7,
+                          height=np.max(np.abs(corr)) * 0.8,
                           distance=CHIRP_LENGTH // 2)
     if len(peaks) == 0:
         raise RuntimeError("No chirp detected in signal.")
