@@ -12,6 +12,9 @@ SAMPLE_RATE = 48000
 PRE_ROLL_SECONDS = 0.5
 PRE_ROLL_NOISE_RMS = 1e-3
 PRE_ROLL_NOISE_SEED = 0
+POST_ROLL_SECONDS = 0.5
+POST_ROLL_NOISE_RMS = 1e-3
+POST_ROLL_NOISE_SEED = 1
 PREAMBLE_PEAK = 0.05
 DATA_PEAK = 0.95
 
@@ -39,28 +42,7 @@ LDPC_BLOCKS_PER_GROUP = 35
 DATA_OFDM_SYMBOLS_PER_GROUP = 30
 DATA_CARRIERS_PER_SYMBOL = 854
 APPENDIX_B_STRIDE = 15839
-
-# Appendix A contains 4096 bits. The first 4094 bits form source QPSK values
-# for bins 1..2047; pilot OFDM symbols use only values at active data bins.
-APPENDIX_A_PILOT_HEX = (
-    "05fece0d5f219b5937c6513689da58b463ee58afba184f9788f4ec03d78a05a"
-    "04c6fd81b93f9330dc5b876cd5ca87165e20d3cbb3e1adbcbf9e332c758b940a"
-    "4f5ec4de36e0b1cb51796d2bdd7bb1ab94ac248e26fd31b6ef42828b4f686010"
-    "23f136de47a076bf51f64e0d082f2a37673746dd117141dd324f42ca7837eae2"
-    "19567ac1cb7960ce4a68e7bffae3d759f38b7141bd43500d7deb1b377cc57f17"
-    "b40995bc347bec748dadf7c48ce90be1ba62457754bca274580f9ba145ac2c246"
-    "7182e5ea095a48a333543726fd432dbdd75f7976452bcfddecca251f368ba8ac2"
-    "2023ecb91e200d654f6cd2f769ec0996b082a030f07b0c293fbdf5caf426a703"
-    "8f8677f1e3719178702dcbee1e01079d6078620c41720fd4498b15b4097b3245"
-    "ceb803d894be963f438b63e967fdebdc1de4e0dcba8aa47c4e60d8cbdcef05c7"
-    "56984e25eba23cc7fc364e5df72dda9ea7751a5317bf99ab172ad82b56e35067"
-    "42c90ca53f0c66d2a0612583f9ce9355f734292d0bd9b727185b13973555a02b"
-    "ec0685beef8227379bde859b17ed44af1b6f129f0a33f884f3e625142ea0c46b"
-    "0886069ec41d34584c37040fcba4b4b061dfe7863d6a979119bb7d8bd8746d93"
-    "883007d4ac10e7d1b4bad7db415706de6d57274e1491b61542d4a7507caaa35f"
-    "c0a3e27c66f39790603ef0972d01a95f830365e4f771ec9bfb9e946ca0adab4"
-)
-
+PILOT_SEED_PATH = Path(__file__).resolve().parent.parent / "seed_qpsk.npy"
 
 def pack_header(file_size: int, filename: str) -> bytes:
     """Pack JOSS-F header fields A, B and C using big-endian integers."""
@@ -281,16 +263,42 @@ def uncoded_bits_to_data_symbols(bitstream: np.ndarray) -> np.ndarray:
     )
 
 
-def appendix_a_pilot_values() -> np.ndarray:
-    """Return Appendix A QPSK values for bins 1..2047."""
-    pilot_bytes = bytes.fromhex(APPENDIX_A_PILOT_HEX)
-    pilot_bits = np.unpackbits(
-        np.frombuffer(pilot_bytes, dtype=np.uint8),
-        bitorder="big",
+def appendix_a_pilot_values(
+    seed_path: Path = PILOT_SEED_PATH,
+) -> np.ndarray:
+    """
+    Load pilot QPSK values for positive-frequency bins 1..2047.
+
+    seed_qpsk.npy contains the complete 2048-point positive spectrum:
+    index 0 is the zero-valued DC bin and indices 1..2047 are QPSK values.
+    """
+    seed_path = Path(seed_path)
+    if not seed_path.is_file():
+        raise FileNotFoundError(f"Pilot seed file not found: {seed_path}")
+
+    spectrum = np.load(seed_path, allow_pickle=False)
+    if spectrum.shape != (OFDM_SIZE // 2,):
+        raise ValueError(
+            f"Expected {OFDM_SIZE // 2} pilot values in {seed_path}, "
+            f"got shape {spectrum.shape}."
+        )
+
+    spectrum = np.asarray(spectrum, dtype=np.complex128)
+    if not np.isclose(spectrum[0], 0.0):
+        raise ValueError("Pilot seed index 0 must be the zero-valued DC bin.")
+
+    pilot_values = spectrum[1:]
+    valid_qpsk = (
+        np.isin(pilot_values.real, (-1.0, 1.0))
+        & np.isin(pilot_values.imag, (-1.0, 1.0))
     )
-    if len(pilot_bits) != 4096:
-        raise ValueError("Appendix A pilot data must contain exactly 4096 bits.")
-    return bits_to_qpsk(pilot_bits[:4094])
+    if not np.all(valid_qpsk):
+        invalid_count = int(np.count_nonzero(~valid_qpsk))
+        raise ValueError(
+            f"Pilot seed contains {invalid_count} non-QPSK values "
+            "outside the DC bin."
+        )
+    return pilot_values.copy()
 
 
 def _ofdm_symbol_from_positive_bins(
@@ -315,7 +323,7 @@ def generate_periodic_pilot_symbol(
     f_low: float = OFDM_F_LOW,
     f_high: float = OFDM_F_HIGH,
 ) -> np.ndarray:
-    """Generate an Appendix A pilot occupying only active data bins."""
+    """Generate the shared pilot seed on active data bins only."""
     active_bins = _active_subcarrier_indices(fs, nfft, f_low, f_high)
     appendix_values = appendix_a_pilot_values()
     if len(appendix_values) != nfft // 2 - 1:
@@ -426,11 +434,17 @@ def build_transmitter_waveform(
     else:
         data_symbols = uncoded_bits_to_data_symbols(source_bits)
 
-    rng = np.random.default_rng(PRE_ROLL_NOISE_SEED)
-    pre_roll = rng.normal(
+    pre_roll_rng = np.random.default_rng(PRE_ROLL_NOISE_SEED)
+    pre_roll = pre_roll_rng.normal(
         loc=0.0,
         scale=PRE_ROLL_NOISE_RMS,
         size=int(round(PRE_ROLL_SECONDS * SAMPLE_RATE)),
+    )
+    post_roll_rng = np.random.default_rng(POST_ROLL_NOISE_SEED)
+    post_roll = post_roll_rng.normal(
+        loc=0.0,
+        scale=POST_ROLL_NOISE_RMS,
+        size=int(round(POST_ROLL_SECONDS * SAMPLE_RATE)),
     )
     chirps = generate_chirp_train()
     golay = generate_golay_preamble()
@@ -441,7 +455,7 @@ def build_transmitter_waveform(
         PREAMBLE_PEAK,
     )
     data = scale_waveform_to_peak(data, DATA_PEAK)
-    return np.concatenate([pre_roll, preamble, data])
+    return np.concatenate([pre_roll, preamble, data, post_roll])
 
 
 def parse_arguments() -> argparse.Namespace:
