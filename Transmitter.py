@@ -38,8 +38,8 @@ DATA_OFDM_SYMBOLS_PER_GROUP = 30
 DATA_CARRIERS_PER_SYMBOL = 854
 APPENDIX_B_STRIDE = 15839
 
-# Appendix A contains 4096 bits. Per the agreed mapping, the first 4094 bits
-# form 2047 QPSK values for bins 1..2047; DC and the Nyquist bin remain zero.
+# Appendix A contains 4096 bits. The first 4094 bits form source QPSK values
+# for bins 1..2047; pilot OFDM symbols use only values at active data bins.
 APPENDIX_A_PILOT_HEX = (
     "05fece0d5f219b5937c6513689da58b463ee58afba184f9788f4ec03d78a05a"
     "04c6fd81b93f9330dc5b876cd5ca87165e20d3cbb3e1adbcbf9e332c758b940a"
@@ -307,16 +307,20 @@ def _ofdm_symbol_from_positive_bins(
 
 
 def generate_periodic_pilot_symbol(
+    fs: int = SAMPLE_RATE,
     nfft: int = OFDM_SIZE,
     cp_len: int = OFDM_CP_LENGTH,
+    f_low: float = OFDM_F_LOW,
+    f_high: float = OFDM_F_HIGH,
 ) -> np.ndarray:
-    """Generate the Appendix A pilot using bins 1..2047 and zero Nyquist."""
-    pilot_bins = np.arange(1, nfft // 2, dtype=np.int64)
-    pilot_values = appendix_a_pilot_values()
-    if len(pilot_values) != len(pilot_bins):
+    """Generate an Appendix A pilot occupying only active data bins."""
+    active_bins = _active_subcarrier_indices(fs, nfft, f_low, f_high)
+    appendix_values = appendix_a_pilot_values()
+    if len(appendix_values) != nfft // 2 - 1:
         raise ValueError("Appendix A pilot mapping does not match the OFDM size.")
+    pilot_values = appendix_values[active_bins - 1]
     return _ofdm_symbol_from_positive_bins(
-        pilot_bins,
+        active_bins,
         pilot_values,
         nfft=nfft,
         cp_len=cp_len,
@@ -340,7 +344,13 @@ def generate_ofdm_symbols(
             f"Expected data symbols with shape (n, {len(active_bins)})."
         )
 
-    pilot_symbol = generate_periodic_pilot_symbol(nfft=nfft, cp_len=cp_len)
+    pilot_symbol = generate_periodic_pilot_symbol(
+        fs=fs,
+        nfft=nfft,
+        cp_len=cp_len,
+        f_low=f_low,
+        f_high=f_high,
+    )
     symbols = []
     data_block_index = 0
 
