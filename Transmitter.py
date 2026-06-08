@@ -12,6 +12,8 @@ SAMPLE_RATE = 48000
 PRE_ROLL_SECONDS = 0.5
 PRE_ROLL_NOISE_RMS = 1e-3
 PRE_ROLL_NOISE_SEED = 0
+PREAMBLE_PEAK = 0.05
+DATA_PEAK = 0.95
 
 CHIRP_COUNT = 10
 CHIRP_LENGTH = 4096
@@ -376,12 +378,23 @@ def generate_ofdm_symbols(
 
 
 def normalize_waveform(signal: np.ndarray, peak: float = 0.95) -> np.ndarray:
-    """Normalize a real waveform to a target peak magnitude."""
+    """Attenuate a real waveform only when it exceeds the target peak."""
     signal = np.asarray(signal, dtype=np.float64)
     max_value = np.max(np.abs(signal)) if len(signal) else 0.0
     if max_value > peak:
-        return signal* (peak / max_value)
-    return signal 
+        return signal * (peak / max_value)
+    return signal
+
+
+def scale_waveform_to_peak(signal: np.ndarray, peak: float) -> np.ndarray:
+    """Scale one waveform section up or down to an exact target peak."""
+    signal = np.asarray(signal, dtype=np.float64)
+    if not 0.0 < peak <= 1.0:
+        raise ValueError("Target peak must be in the interval (0, 1].")
+    max_value = np.max(np.abs(signal)) if len(signal) else 0.0
+    if max_value == 0.0:
+        return signal
+    return signal * (peak / max_value)
 
 
 def save_waveform_to_wav(signal: np.ndarray, fs: int, path: str) -> None:
@@ -422,7 +435,13 @@ def build_transmitter_waveform(
     chirps = generate_chirp_train()
     golay = generate_golay_preamble()
     data = generate_ofdm_symbols(data_symbols)
-    return np.concatenate([pre_roll, chirps, golay, data])
+
+    preamble = scale_waveform_to_peak(
+        np.concatenate([chirps, golay]),
+        PREAMBLE_PEAK,
+    )
+    data = scale_waveform_to_peak(data, DATA_PEAK)
+    return np.concatenate([pre_roll, preamble, data])
 
 
 def parse_arguments() -> argparse.Namespace:
