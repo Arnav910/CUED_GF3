@@ -13,7 +13,7 @@ import argparse
 import importlib.util
 import struct
 from pathlib import Path
-
+import os
 
 import numpy as np
 from scipy.io.wavfile import read as wav_read
@@ -46,7 +46,7 @@ LDPC_MAX_ITERATIONS       = 200
 DATA_OFDM_SYMBOLS_PER_GROUP = 30
 DATA_CARRIERS_PER_SYMBOL  = 854
 APPENDIX_B_STRIDE         = 15_839
-PILOT_SEED_PATH           = Path(__file__).resolve().parent.parent / "seed_qpsk.npy"
+PILOT_SEED_PATH           = Path(__file__).resolve().parent/ "seed_qpsk.npy"
 PHASE_COHERENCE_THRESHOLD = 0.30
 MAX_SLOPE_INNOVATION      = 4.0e-4
 SLOPE_CONTINUITY_PENALTY  = 0.20
@@ -65,7 +65,7 @@ GOLAY_SIGNAL_LENGTH = (GOLAY_CP_LENGTH
 _bins       = np.arange(1, OFDM_SIZE // 2, dtype=np.int64)
 _freqs      = _bins * SAMPLE_RATE / OFDM_SIZE
 ACTIVE_BINS = _bins[(_freqs >= OFDM_F_LOW) & (_freqs <= OFDM_F_HIGH)]
-assert len(ACTIVE_BINS) == DATA_CARRIERS_PER_SYMBOL
+assert len(ACTIVE_BINS) == DATA_CARRIERS_PER_SYMBOL ### test to verify if thsi breaks im sorry whhat??
 
 def _load_pilot_values(seed_path=PILOT_SEED_PATH):
     """Load and validate pilot values for positive-frequency bins 1..2047."""
@@ -81,15 +81,15 @@ def _load_pilot_values(seed_path=PILOT_SEED_PATH):
         )
 
     spectrum = np.asarray(spectrum, dtype=np.complex128)
-    if not np.isclose(spectrum[0], 0.0):
+    if not np.isclose(spectrum[0], 0.0): ### verify starts from 0 and meets the standard
         raise ValueError("Pilot seed index 0 must be the zero-valued DC bin.")
 
-    pilot_values = spectrum[1:]
+    pilot_values = spectrum[1:] ### read all pilot values
     valid_qpsk = (
         np.isin(pilot_values.real, (-1.0, 1.0))
         & np.isin(pilot_values.imag, (-1.0, 1.0))
     )
-    if not np.all(valid_qpsk):
+    if not np.all(valid_qpsk): ### verify if all the pilots are valid
         invalid_count = int(np.count_nonzero(~valid_qpsk))
         raise ValueError(
             f"Pilot seed contains {invalid_count} non-QPSK values "
@@ -98,8 +98,8 @@ def _load_pilot_values(seed_path=PILOT_SEED_PATH):
     return pilot_values.copy()
 
 
-_PILOT_VALUES = _load_pilot_values()
-ACTIVE_PILOT_VALUES = _PILOT_VALUES[ACTIVE_BINS - 1]
+_PILOT_VALUES = _load_pilot_values() ### prepare pilots
+ACTIVE_PILOT_VALUES = _PILOT_VALUES[ACTIVE_BINS - 1] ### nyquist - 1
 
 
 # ── Golay pair ────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ def find_chirp_end(signal):
         height=np.max(corr) * 0.5,
         distance=int(0.7 * CHIRP_LENGTH),
     )
-    lags=correlation_lags(len(signal),len(single_chirp),mode='valid')
+    lags = correlation_lags(len(signal),len(single_chirp),mode='valid')
     detected_lags = lags[peaks]
     if len(peaks) == 0:
         raise RuntimeError("No chirp detected in signal.")
@@ -247,7 +247,7 @@ def _fit_common_and_slope(phase, weight):
         return 0.0, 0.0
 
     x = ACTIVE_BINS.astype(np.float64)
-    x -= np.mean(x)
+    x -= np.mean(x) ## centred x
     design = np.column_stack([np.ones(np.count_nonzero(reliable)), x[reliable]])
     root_weight = np.sqrt(weight[reliable] / np.max(weight[reliable]))
     coefficients = np.linalg.lstsq(
@@ -1697,7 +1697,7 @@ def decode_signal(
 def main():
     parser = argparse.ArgumentParser(description="JOSS-F receiver")
     parser.add_argument("input_wav",   nargs="?", default="rx.wav")
-    parser.add_argument("output_file", nargs="?", default=None)
+    #parser.add_argument("output_file", nargs="?", default=None)
     parser.add_argument("--no-ldpc",   action="store_true")
     parser.add_argument("--lam",       type=float, default=1e-6)
     parser.add_argument(
@@ -1737,17 +1737,7 @@ def main():
         phase_debug=args.phase_debug,
         constellation_path=args.plot_constellation,
     )
-
-    out_path = args.output_file
-    if not out_path:
-        invalid = set('\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b'
-                      '\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17'
-                      '\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f<>:"/\\|?*')
-        if filename and not any(c in invalid for c in filename):
-            out_path = filename
-        else:
-            out_path = "recovered_output.bin"
-            print(f"Warning: filename {filename!r} invalid, saving as '{out_path}'")
+    out_path = os.path.join(os.getcwd(), filename)
 
     Path(out_path).write_bytes(payload)
     print(f"Saved '{out_path}'  ({file_len} bytes)")
