@@ -3,6 +3,7 @@ import importlib.util
 import os
 import struct
 from pathlib import Path
+from scipy.signal import chirp
 
 import numpy as np
 from scipy.io.wavfile import write as wav_write
@@ -88,10 +89,9 @@ def generate_linear_chirp(
     fs: int = SAMPLE_RATE,
 ) -> np.ndarray:
     """Generate one JOSS-F linear chirp."""
-    t = np.arange(length, dtype=np.float64) / fs
-    sweep_rate = (f1 - f0) / (length / fs)
-    phase = 2.0 * np.pi * (f0 * t + 0.5 * sweep_rate * t * t)
-    return np.cos(phase)
+    t = np.linspace(0, length / fs, length)
+    single_chirp = chirp(t, f0=f0, f1=f1, t1=(length / fs), method='linear')
+    return single_chirp
 
 
 def generate_chirp_train(
