@@ -188,8 +188,16 @@ def apply_ldpc_encoding(bitstream: np.ndarray) -> tuple[np.ndarray, int]:
     padded_length = group_count * group_info_bits
     padding_bits = padded_length - len(bits)
     if padding_bits:
+        #padding=np.zeros(padding_bits, dtype=np.uint8)
+        rng = np.random.default_rng(12345)
+        padding = rng.integers(
+        0,
+        2,
+        size=padding_bits,
+        dtype=np.uint8,
+        )
         bits = np.concatenate(
-            [bits, np.zeros(padding_bits, dtype=np.uint8)]
+            [bits, padding]
         )
 
     encoder = _load_ldpc_encoder()
